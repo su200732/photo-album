@@ -42,6 +42,7 @@
             box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
             transition: transform 0.3s ease, box-shadow 0.3s ease;
             cursor: pointer;
+            position: relative;
         }
         
         .photo-card:hover {
@@ -54,6 +55,44 @@
             height: 200px;
             object-fit: cover;
             display: block;
+            transition: opacity 0.3s ease;
+        }
+        
+        /* 图片加载占位符 */
+        .photo-placeholder {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 200px;
+            background-color: #f0f0f0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        /* 加载动画 */
+        .loading-spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #3498db;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        /* 图片加载错误样式 */
+        .photo-error {
+            background-color: #ffebee;
+            color: #c62828;
+            font-size: 14px;
+            text-align: center;
+            padding: 20px;
         }
         
         .photo-info {
@@ -96,6 +135,12 @@
             transform: translate(-50%, -50%);
         }
         
+        /* 模态框加载动画 */
+        .modal-content.loading {
+            background: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="50" height="50" viewBox="0 0 50 50"><circle cx="25" cy="25" r="20" fill="none" stroke="%23f3f3f3" stroke-width="5"></circle><circle cx="25" cy="25" r="20" fill="none" stroke="%233498db" stroke-width="5" stroke-dasharray="125.6" stroke-dashoffset="75.36" transform="rotate(-90 25 25)"></circle></svg>') no-repeat center center;
+            background-size: 50px 50px;
+        }
+        
         .close {
             position: absolute;
             top: 20px;
@@ -114,6 +159,24 @@
             cursor: pointer;
         }
         
+        /* 刷新按钮 */
+        .refresh-btn {
+            background-color: #3498db;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 20px auto;
+            display: block;
+            transition: background-color 0.3s ease;
+        }
+        
+        .refresh-btn:hover {
+            background-color: #2980b9;
+        }
+        
         /* 响应式设计 */
         @media (max-width: 768px) {
             .album {
@@ -121,7 +184,8 @@
                 gap: 15px;
             }
             
-            .photo-card img {
+            .photo-card img,
+            .photo-placeholder {
                 height: 150px;
             }
         }
@@ -132,7 +196,8 @@
                 gap: 10px;
             }
             
-            .photo-card img {
+            .photo-card img,
+            .photo-placeholder {
                 height: 120px;
             }
         }
@@ -161,6 +226,12 @@
         // 图片文件扩展名
         const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg'];
         
+        // 缓存配置
+        const cacheConfig = {
+            key: 'github-photo-album-cache',
+            expireTime: 30 * 60 * 1000 // 30分钟缓存
+        };
+        
         // 获取相册容器
         const album = document.getElementById('album');
         
@@ -169,10 +240,33 @@
             const card = document.createElement('div');
             card.className = 'photo-card';
             
+            // 创建加载占位符
+            const placeholder = document.createElement('div');
+            placeholder.className = 'photo-placeholder';
+            placeholder.innerHTML = '<div class="loading-spinner"></div>';
+            card.appendChild(placeholder);
+            
             const img = document.createElement('img');
-            img.src = photo.url;
             img.alt = photo.title;
             img.loading = 'lazy'; // 懒加载
+            img.style.opacity = '0'; // 初始隐藏
+            
+            // 图片加载完成
+            img.onload = function() {
+                img.style.opacity = '1';
+                placeholder.style.display = 'none';
+            };
+            
+            // 图片加载错误
+            img.onerror = function() {
+                placeholder.innerHTML = '<div class="photo-error">图片加载失败</div>';
+                img.style.display = 'none';
+            };
+            
+            // 设置图片源（延迟设置，确保事件监听器已添加）
+            setTimeout(() => {
+                img.src = photo.url;
+            }, 0);
             
             const info = document.createElement('div');
             info.className = 'photo-info';
@@ -204,11 +298,58 @@
             return imageExtensions.includes(ext);
         }
         
+        // 获取缓存数据
+        function getCache() {
+            try {
+                const cached = localStorage.getItem(cacheConfig.key);
+                if (cached) {
+                    const data = JSON.parse(cached);
+                    // 检查缓存是否过期
+                    if (Date.now() - data.timestamp < cacheConfig.expireTime) {
+                        return data.photos;
+                    }
+                }
+            } catch (error) {
+                console.error('读取缓存失败:', error);
+            }
+            return null;
+        }
+        
+        // 设置缓存数据
+        function setCache(photos) {
+            try {
+                const data = {
+                    photos: photos,
+                    timestamp: Date.now()
+                };
+                localStorage.setItem(cacheConfig.key, JSON.stringify(data));
+            } catch (error) {
+                console.error('设置缓存失败:', error);
+            }
+        }
+        
         // 从GitHub API获取照片列表
         async function fetchPhotosFromGithub() {
+            // 先检查缓存
+            const cachedPhotos = getCache();
+            if (cachedPhotos) {
+                return cachedPhotos;
+            }
+            
             try {
                 const url = `https://api.github.com/repos/${githubConfig.username}/${githubConfig.repo}/contents/?ref=${githubConfig.branch}`;
-                const response = await fetch(url);
+                // 添加超时处理
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 10000); // 10秒超时
+                
+                const response = await fetch(url, {
+                    signal: controller.signal,
+                    headers: {
+                        'Accept': 'application/vnd.github.v3+json'
+                    }
+                });
+                
+                clearTimeout(timeoutId);
                 
                 if (!response.ok) {
                     throw new Error(`GitHub API请求失败: ${response.status}`);
@@ -229,11 +370,25 @@
                     }
                 });
                 
+                // 保存到缓存
+                setCache(photos);
+                
                 return photos;
             } catch (error) {
                 console.error('获取照片失败:', error);
+                // 如果是超时或网络错误，返回空数组
                 return [];
             }
+        }
+        
+        // 预加载图片
+        function preloadImages(photos, count = 3) {
+            // 只预加载前几张图片
+            const preloadPhotos = photos.slice(0, count);
+            preloadPhotos.forEach(photo => {
+                const img = new Image();
+                img.src = photo.url;
+            });
         }
         
         // 渲染相册
@@ -246,10 +401,24 @@
             // 清空相册
             album.innerHTML = '';
             
+            // 添加刷新按钮
+            const refreshBtn = document.createElement('button');
+            refreshBtn.className = 'refresh-btn';
+            refreshBtn.textContent = '刷新照片';
+            refreshBtn.onclick = function() {
+                // 清除缓存
+                localStorage.removeItem(cacheConfig.key);
+                renderAlbum();
+            };
+            album.appendChild(refreshBtn);
+            
             if (photos.length === 0) {
-                album.innerHTML = '<div style="grid-column: 1 / -1; text-align: center; padding: 20px; color: #666;">暂无照片，请先上传照片到GitHub仓库</div>';
+                album.innerHTML += '<div style="grid-column: 1 / -1; text-align: center; padding: 20px; color: #666;">暂无照片，请先上传照片到GitHub仓库</div>';
                 return;
             }
+            
+            // 预加载图片
+            preloadImages(photos);
             
             // 创建并添加照片卡片
             photos.forEach(photo => {
@@ -263,14 +432,35 @@
             const modal = document.getElementById('myModal');
             const modalImg = document.getElementById('modalImg');
             
+            // 设置加载状态
+            modalImg.className = 'modal-content loading';
+            modalImg.src = ''; // 清空图片源
+            
             modal.style.display = 'block';
-            modalImg.src = imgUrl;
+            
+            // 延迟加载图片，确保模态框已显示
+            setTimeout(() => {
+                modalImg.onload = function() {
+                    modalImg.className = 'modal-content'; // 移除加载类
+                };
+                
+                modalImg.onerror = function() {
+                    modalImg.className = 'modal-content';
+                    modalImg.alt = '图片加载失败';
+                };
+                
+                modalImg.src = imgUrl;
+            }, 100);
         }
         
         // 关闭模态框
         function closeModal() {
             const modal = document.getElementById('myModal');
             modal.style.display = 'none';
+            
+            // 清空图片源，释放内存
+            const modalImg = document.getElementById('modalImg');
+            modalImg.src = '';
         }
         
         // 初始化
